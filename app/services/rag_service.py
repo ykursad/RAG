@@ -9,6 +9,12 @@ from app.schemas import SourceChunk
 from app.services.chunker import TextChunker
 from app.services.document_loader import DocumentLoader
 from app.services.ollama_client import OllamaClient
+from app.services.search_strategies import (
+    distance_to_similarity,
+    hybrid_score,
+    lexical_overlap_score,
+    rerank_score,
+)
 from app.services.vector_store import VectorStore
 
 
@@ -44,8 +50,6 @@ class RagService:
 
         self.logger.info("Embedding üretildi | dosya=%s", file_path.name)
 
-        # Çok dokümanlı mantık: tüm koleksiyonu silmiyoruz.
-        # Yalnızca aynı source daha önce varsa onu güncelliyoruz.
         self.store.delete_by_source(source_name=source_name)
 
         self.store.add_chunks(
@@ -64,20 +68,12 @@ class RagService:
             "source_name": source_name,
         }
 
-    def retrieve(
+    def _vector_retrieve(
         self,
         question: str,
-        top_k: int | None = None,
+        top_k: int,
         source_filter: str | None = None,
     ) -> list[SourceChunk]:
-        top_k = top_k or self.settings.top_k
-        self.logger.info(
-            "Retrieve başladı | soru=%s | top_k=%s | source_filter=%s",
-            question,
-            top_k,
-            source_filter,
-        )
-
         query_embedding = self.ollama.embed([question])[0]
         raw = self.store.query(
             query_embedding=query_embedding,
@@ -103,7 +99,133 @@ class RagService:
                 )
             )
 
-        results = self._deduplicate_sources(results)
+        return results
+
+    def _lexical_candidates(
+        self,
+        question: str,
+        source_filter: str | None = None,
+    ) -> list[SourceChunk]:
+        raw = self.store.fetch_for_lexical_search(source_filter=source_filter)
+
+        ids = raw.get("ids", [])
+        documents = raw.get("documents", [])
+        metadatas = raw.get("metadatas", [])
+
+        results: list[SourceChunk] = []
+
+        for chunk_id, document, metadata in zip(ids, documents, metadatas):
+            metadata = metadata or {}
+            lex_score = lexical_overlap_score(question, document)
+
+            if lex_score <= 0:
+                continue
+
+            results.append(
+                SourceChunk(
+                    chunk_id=chunk_id,
+                    score=lex_score,
+                    page=metadata.get("page"),
+                    text=document,
+                    metadata=metadata,
+                )
+            )
+
+        results.sort(key=lambda x: x.score or 0, reverse=True)
+        return results
+
+    def _hybrid_merge(
+        self,
+        question: str,
+        vector_results: list[SourceChunk],
+        lexical_results: list[SourceChunk],
+        top_k: int,
+    ) -> list[SourceChunk]:
+        merged: dict[str, dict] = {}
+
+        for item in vector_results:
+            merged[item.chunk_id] = {
+                "chunk": item,
+                "vector_similarity": distance_to_similarity(item.score),
+                "lexical_score": lexical_overlap_score(question, item.text),
+            }
+
+        for item in lexical_results:
+            if item.chunk_id not in merged:
+                merged[item.chunk_id] = {
+                    "chunk": item,
+                    "vector_similarity": 0.0,
+                    "lexical_score": item.score or 0.0,
+                }
+            else:
+                merged[item.chunk_id]["lexical_score"] = max(
+                    merged[item.chunk_id]["lexical_score"],
+                    item.score or 0.0,
+                )
+
+        scored = []
+        for value in merged.values():
+            final_score = hybrid_score(
+                vector_similarity=value["vector_similarity"],
+                lexical_score=value["lexical_score"],
+                vector_weight=self.settings.hybrid_vector_weight,
+                lexical_weight=self.settings.hybrid_lexical_weight,
+            )
+            scored.append((final_score, value["chunk"]))
+
+        scored.sort(key=lambda x: x[0], reverse=True)
+        return [item[1] for item in scored[:top_k]]
+
+    def _apply_rerank(
+        self,
+        question: str,
+        items: list[SourceChunk],
+    ) -> list[SourceChunk]:
+        if not self.settings.rerank_enabled:
+            return items
+
+        rescored = []
+        for item in items:
+            score = rerank_score(question, item.text, item.score)
+            rescored.append((score, item))
+
+        rescored.sort(key=lambda x: x[0], reverse=True)
+        return [item[1] for item in rescored]
+
+    def retrieve(
+        self,
+        question: str,
+        top_k: int | None = None,
+        source_filter: str | None = None,
+    ) -> list[SourceChunk]:
+        top_k = top_k or self.settings.top_k
+        self.logger.info(
+            "Retrieve başladı | soru=%s | top_k=%s | source_filter=%s",
+            question,
+            top_k,
+            source_filter,
+        )
+
+        vector_results = self._vector_retrieve(
+            question=question,
+            top_k=top_k * 2,
+            source_filter=source_filter,
+        )
+        lexical_results = self._lexical_candidates(
+            question=question,
+            source_filter=source_filter,
+        )[: top_k * 2]
+
+        hybrid_results = self._hybrid_merge(
+            question=question,
+            vector_results=vector_results,
+            lexical_results=lexical_results,
+            top_k=top_k * 2,
+        )
+
+        reranked = self._apply_rerank(question=question, items=hybrid_results)
+        results = self._deduplicate_sources(reranked)[:top_k]
+
         self.logger.info("Retrieve tamamlandı | sonuc_sayisi=%s", len(results))
         return results
 
@@ -148,6 +270,19 @@ class RagService:
 
         return selected
 
+    def _should_abstain(self, retrieved: list[SourceChunk]) -> bool:
+        if not self.settings.abstain_if_no_strong_context:
+            return False
+
+        if len(retrieved) < self.settings.min_context_results:
+            return True
+
+        best = retrieved[0]
+        if best.score is None:
+            return False
+
+        return best.score > self.settings.max_acceptable_distance
+
     def answer(
         self,
         question: str,
@@ -166,20 +301,23 @@ class RagService:
             source_filter=source_filter,
         )
 
-        if not retrieved:
+        if not retrieved or self._should_abstain(retrieved):
             return {
                 "answer": (
-                    "Kısa Cevap:\nİndekste uygun içerik bulunamadı.\n\n"
-                    "Detaylı Açıklama:\nÖnce bir doküman yükleyin veya uygun belge filtresi seçin.\n\n"
-                    "Dokümandaki Dayanaklar:\n- Uygun bağlam bulunamadı.\n\n"
-                    "Belirsizlik / Not:\n- Bu cevap herhangi bir doküman bağlamına dayanmıyor.\n\n"
-                    "Kaynaklar:\nYok"
+                    "Kısa Cevap:\nSoruya güvenilir bir şekilde yanıt verecek kadar güçlü bağlam bulunamadı.\n\n"
+                    "Detaylı Açıklama:\nSistemde ilgili bilgi olabilir; ancak mevcut retrieval sonuçları yeterince güçlü veya tutarlı görünmüyor. "
+                    "Daha spesifik bir soru sormayı ya da doğru belge filtresi seçmeyi deneyin.\n\n"
+                    "Dokümandaki Dayanaklar:\n- Retrieval sonuçları güven eşiğini karşılamadı.\n\n"
+                    "Belirsizlik / Not:\n- Sistem bilinçli olarak yanıt vermemeyi tercih etti.\n\n"
+                    "Kaynaklar:\nYetersiz bağlam"
                 ),
-                "sources": [],
+                "sources": retrieved[: min(3, len(retrieved))],
                 "prompt_context_length": 0,
-                "retrieved_pages": [],
-                "source_count": 0,
-                "retrieved_sources": [],
+                "retrieved_pages": sorted({item.page for item in retrieved if item.page is not None}),
+                "source_count": len(retrieved[: min(3, len(retrieved))]),
+                "retrieved_sources": sorted(
+                    {item.metadata.get('source') for item in retrieved if item.metadata.get('source')}
+                ),
             }
 
         selected = self._select_context_chunks(retrieved)

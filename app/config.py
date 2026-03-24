@@ -20,6 +20,13 @@ class Settings(BaseSettings):
     chunk_overlap: int = 180
     max_context_chunks: int = 5
 
+    hybrid_vector_weight: float = 0.7
+    hybrid_lexical_weight: float = 0.3
+    rerank_enabled: bool = True
+    abstain_if_no_strong_context: bool = True
+    max_acceptable_distance: float = 1.2
+    min_context_results: int = 1
+
     model_config = SettingsConfigDict(
         env_file=".env",
         env_file_encoding="utf-8",

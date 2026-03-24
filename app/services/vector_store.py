@@ -61,6 +61,21 @@ class VectorStore:
 
         return collection.query(**kwargs)
 
+    def fetch_for_lexical_search(
+        self,
+        source_filter: str | None = None,
+    ) -> dict[str, Any]:
+        collection = self.get_collection()
+
+        kwargs = {
+            "include": ["documents", "metadatas"],
+        }
+
+        if source_filter:
+            kwargs["where"] = {"source": source_filter}
+
+        return collection.get(**kwargs)
+
     def count(self) -> int:
         return self.get_collection().count()
 
