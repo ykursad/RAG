@@ -44,7 +44,10 @@ class RagService:
 
         self.logger.info("Embedding üretildi | dosya=%s", file_path.name)
 
-        self.store.reset_collection()
+        # Çok dokümanlı mantık: tüm koleksiyonu silmiyoruz.
+        # Yalnızca aynı source daha önce varsa onu güncelliyoruz.
+        self.store.delete_by_source(source_name=source_name)
+
         self.store.add_chunks(
             ids=[chunk.chunk_id for chunk in chunks],
             documents=[chunk.text for chunk in chunks],
@@ -61,12 +64,26 @@ class RagService:
             "source_name": source_name,
         }
 
-    def retrieve(self, question: str, top_k: int | None = None) -> list[SourceChunk]:
+    def retrieve(
+        self,
+        question: str,
+        top_k: int | None = None,
+        source_filter: str | None = None,
+    ) -> list[SourceChunk]:
         top_k = top_k or self.settings.top_k
-        self.logger.info("Retrieve başladı | soru=%s | top_k=%s", question, top_k)
+        self.logger.info(
+            "Retrieve başladı | soru=%s | top_k=%s | source_filter=%s",
+            question,
+            top_k,
+            source_filter,
+        )
 
         query_embedding = self.ollama.embed([question])[0]
-        raw = self.store.query(query_embedding=query_embedding, top_k=top_k)
+        raw = self.store.query(
+            query_embedding=query_embedding,
+            top_k=top_k,
+            source_filter=source_filter,
+        )
 
         ids = raw.get("ids", [[]])[0]
         documents = raw.get("documents", [[]])[0]
@@ -96,7 +113,8 @@ class RagService:
 
         for item in results:
             text_key = item.text[:250].strip().lower()
-            key = (item.page, text_key)
+            source = item.metadata.get("source")
+            key = (source, item.page, text_key)
 
             if key in seen_keys:
                 continue
@@ -108,15 +126,18 @@ class RagService:
 
     def _select_context_chunks(self, retrieved: list[SourceChunk]) -> list[SourceChunk]:
         selected: list[SourceChunk] = []
-        seen_pages = set()
+        seen_source_page = set()
 
         for item in retrieved:
             if len(selected) >= self.settings.max_context_chunks:
                 break
 
-            if item.page not in seen_pages:
+            source = item.metadata.get("source")
+            key = (source, item.page)
+
+            if key not in seen_source_page:
                 selected.append(item)
-                seen_pages.add(item.page)
+                seen_source_page.add(key)
 
         if len(selected) < self.settings.max_context_chunks:
             for item in retrieved:
@@ -127,15 +148,29 @@ class RagService:
 
         return selected
 
-    def answer(self, question: str, top_k: int | None = None) -> dict:
-        self.logger.info("Answer başladı | soru=%s", question)
-        retrieved = self.retrieve(question=question, top_k=top_k)
+    def answer(
+        self,
+        question: str,
+        top_k: int | None = None,
+        source_filter: str | None = None,
+    ) -> dict:
+        self.logger.info(
+            "Answer başladı | soru=%s | source_filter=%s",
+            question,
+            source_filter,
+        )
+
+        retrieved = self.retrieve(
+            question=question,
+            top_k=top_k,
+            source_filter=source_filter,
+        )
 
         if not retrieved:
             return {
                 "answer": (
                     "Kısa Cevap:\nİndekste uygun içerik bulunamadı.\n\n"
-                    "Detaylı Açıklama:\nÖnce bir doküman yükleyip indeks oluşturmanız gerekiyor.\n\n"
+                    "Detaylı Açıklama:\nÖnce bir doküman yükleyin veya uygun belge filtresi seçin.\n\n"
                     "Dokümandaki Dayanaklar:\n- Uygun bağlam bulunamadı.\n\n"
                     "Belirsizlik / Not:\n- Bu cevap herhangi bir doküman bağlamına dayanmıyor.\n\n"
                     "Kaynaklar:\nYok"
@@ -158,9 +193,15 @@ class RagService:
         answer = self.ollama.chat(system_prompt=SYSTEM_PROMPT, user_prompt=user_prompt)
 
         retrieved_pages = sorted({item.page for item in selected if item.page is not None})
-        retrieved_sources = list({item.metadata.get("source") for item in selected if item.metadata.get("source")})
+        retrieved_sources = sorted(
+            {item.metadata.get("source") for item in selected if item.metadata.get("source")}
+        )
 
-        self.logger.info("Answer tamamlandı | kaynak_sayisi=%s", len(selected))
+        self.logger.info(
+            "Answer tamamlandı | kaynak_sayisi=%s | source_sayisi=%s",
+            len(selected),
+            len(retrieved_sources),
+        )
 
         return {
             "answer": answer,
@@ -170,3 +211,11 @@ class RagService:
             "source_count": len(selected),
             "retrieved_sources": retrieved_sources,
         }
+
+    def list_documents(self) -> list[dict]:
+        return self.store.list_documents()
+
+    def delete_document(self, source_name: str) -> None:
+        self.logger.info("Belge silme başladı | source=%s", source_name)
+        self.store.delete_by_source(source_name=source_name)
+        self.logger.info("Belge silme tamamlandı | source=%s", source_name)

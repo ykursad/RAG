@@ -10,6 +10,8 @@ from app.config import Settings, get_settings
 from app.schemas import (
     AskRequest,
     AskResponse,
+    DocumentListResponse,
+    DocumentSummary,
     HealthResponse,
     IngestResponse,
     RetrieveResponse,
@@ -28,12 +30,11 @@ def get_service(settings: Settings = Depends(get_settings)) -> RagService:
 @router.get("/", response_class=HTMLResponse)
 def home(request: Request):
     return templates.TemplateResponse(
-        name="index.html",
         request=request,
-        context=
-        {
-            
-            "title": "YKY - Tek Doküman RAG Asistanı",
+        name="index.html",
+        context={
+            "request": request,
+            "title": "Şükrü Yusuf KAYA - Çok Dokümanlı RAG Asistanı",
         },
     )
 
@@ -59,6 +60,30 @@ def reset_index(service: RagService = Depends(get_service)):
     try:
         service.store.reset_collection()
         return {"message": "İndeks başarıyla sıfırlandı."}
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=str(exc)) from exc
+
+
+@router.get("/documents", response_model=DocumentListResponse)
+def list_documents(service: RagService = Depends(get_service)):
+    try:
+        docs = service.list_documents()
+        return DocumentListResponse(
+            total_documents=len(docs),
+            documents=[DocumentSummary(**doc) for doc in docs],
+        )
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=str(exc)) from exc
+
+
+@router.delete("/documents/{source_name}")
+def delete_document(
+    source_name: str,
+    service: RagService = Depends(get_service),
+):
+    try:
+        service.delete_document(source_name=source_name)
+        return {"message": f"{source_name} kaynağı silindi."}
     except Exception as exc:
         raise HTTPException(status_code=500, detail=str(exc)) from exc
 
@@ -104,6 +129,7 @@ def retrieve_only(
         results = service.retrieve(
             question=payload.question,
             top_k=payload.top_k,
+            source_filter=payload.source_filter,
         )
         return RetrieveResponse(
             question=payload.question,
@@ -123,6 +149,7 @@ def ask_question(
         result = service.answer(
             question=payload.question,
             top_k=payload.top_k,
+            source_filter=payload.source_filter,
         )
         return AskResponse(**result)
     except Exception as exc:
