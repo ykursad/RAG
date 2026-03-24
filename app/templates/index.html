@@ -1,0 +1,74 @@
+<!DOCTYPE html>
+<html lang="tr">
+
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>{{ title }}</title>
+  <link rel="stylesheet" href="/static/style.css" />
+</head>
+
+<body>
+  <div class="layout">
+    <aside class="sidebar">
+      <h1>Şükrü Yusuf KAYA</h1>
+      <p class="subtitle">Tek Doküman RAG Asistanı</p>
+
+      <div class="panel">
+        <label>Doküman Seç</label>
+        <input type="file" id="fileInput" accept=".pdf,.txt,.md" />
+        <button id="uploadBtn">Dokümanı İndeksle</button>
+        <div id="uploadStatus" class="status"></div>
+      </div>
+
+      <div class="panel">
+        <label>Top K</label>
+        <input type="number" id="topK" value="6" min="1" max="10" />
+        <button id="retrieveBtn">Yalnızca Retrieve</button>
+      </div>
+
+      <div class="panel">
+        <label>İndeks Yönetimi</label>
+        <button id="resetBtn">İndeksi Sıfırla</button>
+      </div>
+
+      <div class="panel small">
+        <button id="copyLastAnswerBtn">Son Cevabı Kopyala</button>
+      </div>
+
+      <div class="panel small">
+        <h3>Sistem Notu</h3>
+        <p>Önce dokümanı yükleyin. Ardından soru sorun veya retrieve testi yapın.</p>
+      </div>
+
+      <div class="panel small" id="metaPanel">
+        <h3>Son Yanıt Özeti</h3>
+        <p>Henüz bir soru sorulmadı.</p>
+      </div>
+    </aside>
+
+    <main class="chat-area">
+      <div id="chatMessages" class="chat-messages">
+        <div class="message bot">
+          <div class="bubble">
+            Merhaba, ben tek dokümanlı RAG asistanıyım. Önce bir doküman yükleyin, sonra sorularınızı sorun.
+          </div>
+        </div>
+      </div>
+
+      <div class="chat-input">
+        <input type="text" id="questionInput" placeholder="Sorunuzu yazın..." />
+        <button id="askBtn">Sor</button>
+      </div>
+
+      <div id="sourcesPanel" class="sources-panel">
+        <h3>Kaynak Parçalar</h3>
+        <p>Henüz kaynak gösterilecek bir yanıt yok.</p>
+      </div>
+    </main>
+  </div>
+
+  <script src="/static/app.js"></script>
+</body>
+
+</html>
