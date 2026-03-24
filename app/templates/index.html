@@ -12,7 +12,7 @@
   <div class="layout">
     <aside class="sidebar">
       <h1>Şükrü Yusuf KAYA</h1>
-      <p class="subtitle">Tek Doküman RAG Asistanı</p>
+      <p class="subtitle">Çok Dokümanlı RAG Asistanı</p>
 
       <div class="panel">
         <label>Doküman Seç</label>
@@ -22,14 +22,23 @@
       </div>
 
       <div class="panel">
+        <label>Belge Filtresi</label>
+        <select id="sourceFilterSelect">
+          <option value="">Tüm Belgeler</option>
+        </select>
+        <button id="refreshDocsBtn">Belge Listesini Yenile</button>
+        <button id="deleteSelectedDocBtn">Seçili Belgeyi Sil</button>
+      </div>
+
+      <div class="panel">
         <label>Top K</label>
-        <input type="number" id="topK" value="6" min="1" max="10" />
+        <input type="number" id="topK" value="6" min="1" max="20" />
         <button id="retrieveBtn">Yalnızca Retrieve</button>
       </div>
 
       <div class="panel">
         <label>İndeks Yönetimi</label>
-        <button id="resetBtn">İndeksi Sıfırla</button>
+        <button id="resetBtn">Tüm İndeksi Sıfırla</button>
       </div>
 
       <div class="panel small">
@@ -37,8 +46,10 @@
       </div>
 
       <div class="panel small">
-        <h3>Sistem Notu</h3>
-        <p>Önce dokümanı yükleyin. Ardından soru sorun veya retrieve testi yapın.</p>
+        <h3>Yüklü Belgeler</h3>
+        <div id="documentListPanel">
+          <p>Henüz indekslenmiş belge yok.</p>
+        </div>
       </div>
 
       <div class="panel small" id="metaPanel">
@@ -51,7 +62,8 @@
       <div id="chatMessages" class="chat-messages">
         <div class="message bot">
           <div class="bubble">
-            Merhaba, ben tek dokümanlı RAG asistanıyım. Önce bir doküman yükleyin, sonra sorularınızı sorun.
+            Merhaba, ben çok dokümanlı RAG asistanıyım. Bir veya daha fazla belge yükleyebilir, isterseniz yalnızca
+            belirli bir belge üzerinde soru sorabilirsiniz.
           </div>
         </div>
       </div>
